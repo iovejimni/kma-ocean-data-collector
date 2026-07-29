@@ -1,0 +1,30 @@
+# 인증키/환경변수
+.env
+
+# 수집된 데이터 (용량 크고 개인 수집물이라 깃에 안 올림)
+*.csv
+
+# 진행 상황 추적 파일 (실행할 때마다 계속 바뀌는 로컬 상태값)
+*.checkpoint
+kma_api_daily_calls.txt
+
+# 실패/결측 로그 (실행 결과물, 코드가 아님)
+sea_obs_stn22441_failed_times.txt
+sea_obs_stn22441_still_failed.txt
+sea_obs_stn22441_recover_still_missing.txt
+sea_obs_stn22441_all_still_missing.txt
+sea_obs_stn22441_missing_hours.txt
+
+# 옛날 백업/조각 파일 정리 폴더 (개인 작업 흔적, 코드 아님)
+old_backup/
+백업/
+data_download/
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# OS/에디터 관련
+.vscode/
+.DS_Store
+Thumbs.db
