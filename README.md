@@ -27,6 +27,28 @@
 | 수집 주기 | 1시간 단위 |
 | 수집 범위 | 2011-11-15 00:00 ~ 현재 (실측으로 데이터 시작 시점을 직접 확인) |
 
+## 프로젝트 구조
+
+```
+kma-ocean-data-collector/
+├── collect_full_history.py     # 메인 수집기 (정방향, 무중단, 배치 병렬)
+├── run_collect.bat             # Windows 백그라운드 실행용 배치파일
+├── find_and_fill_all_gaps.py   # 전체 기간 결측 탐지 및 재조회 복구
+├── api_quota.py                # 여러 스크립트가 공유하는 일일 API 호출 카운터
+├── diagnose_quota_file.py      # 공유 카운터 파일 상태 진단용
+├── .env.example                # 환경변수 템플릿 (실제 키는 .env에 별도 작성)
+├── .gitignore
+└── README.md
+
+# 실행 시 생성되는 파일 (.gitignore로 관리, 저장소에는 포함 안 됨)
+├── sea_obs_stn22441_full_hourly.csv          # 최종 수집 데이터
+├── sea_obs_stn22441_full_hourly.checkpoint   # 메인 수집기 진행 위치
+├── recover_all_gaps.checkpoint               # 결측 복구 진행 위치
+├── sea_obs_stn22441_failed_times.txt         # 수집 중 실패한 시각 로그
+├── sea_obs_stn22441_all_still_missing.txt    # 재조회해도 못 찾은(진짜 결측 추정) 시각
+└── kma_api_daily_calls.txt                   # 오늘 API 호출 수 (공유 카운터)
+```
+
 ## 아키텍처
 
 ```
@@ -39,7 +61,7 @@ collect_full_history.py   ─ 메인 수집기 (정방향, 무중단, 배치 병
         └─ sea_obs_stn22441_full_hourly.csv   ─ 최종 데이터
 
 find_and_fill_all_gaps.py  ─ 전체 기간을 실측 대조해 빈 시간대 탐지 및 복구
-step1~4_*.py                ─ 파일 분산(작업 폴더 불일치)으로 조각난 데이터 병합/정리 도구
+                              (api_quota.py 공유 카운터 동일하게 참조)
 ```
 
 ## 설치 및 설정
@@ -87,11 +109,19 @@ run_collect.bat
 python find_and_fill_all_gaps.py
 ```
 
+### 3) 쿼터 카운터 상태 진단
+
+공유 카운터 파일이 제대로 인식되는지 확인하고 싶을 때:
+
+```bash
+python diagnose_quota_file.py
+```
+
 ## 프로젝트를 진행하며 겪은 주요 이슈와 해결
 
 - **API 문서상 파라미터 설명과 실제 서버 동작이 다른 경우가 있어**, 항상 실제 호출로 검증 후 반영했습니다. (예: `tm` 생략 시 동작)
 - **레이트리밋(401)과 일일 쿼터 초과(403)를 구분하지 못해 데이터가 조용히 누락된 적이 있어**, HTTP 상태코드 기반으로 성공/실패를 명확히 구분하고 실패 로그를 남기도록 개선했습니다.
-- **여러 스크립트를 각기 다른 작업 폴더에서 실행해 데이터 파일이 분산된 적이 있어**, 병합·중복제거·재정렬하는 복구 파이프라인(step1~4)을 별도로 구축했습니다.
+- **여러 스크립트를 각기 다른 작업 폴더에서 실행해 데이터 파일이 분산된 적이 있어**, 병합·중복제거·재정렬하는 일회성 복구 스크립트를 만들어 데이터를 살렸습니다. (해당 사고는 복구 완료 후 정리되어 현재 저장소에는 포함되어 있지 않으며, 이후로는 `find_and_fill_all_gaps.py`가 같은 역할을 상시적으로 대신합니다.)
 - **프로세스별로 따로 세던 API 호출 카운터가 실제 사용량과 어긋나는 문제**를 파일 기반 공유 카운터로 해결했습니다.
 
 ## 사용 기술
