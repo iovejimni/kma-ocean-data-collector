@@ -18,6 +18,8 @@ import ctypes
 import requests
 from datetime import datetime, timedelta
 
+import api_quota
+
 
 def load_env_file(path=".env"):
     """.env 파일이 있으면 읽어서 os.environ에 반영 (외부 라이브러리 없이 최소 구현)"""
@@ -50,6 +52,9 @@ REQUEST_DELAY_SEC = 3
 RETRY_DELAY_SEC = 10
 MAX_RETRIES = 3
 
+CONSECUTIVE_FAIL_LIMIT = 20      # 연속 이만큼 실패하면 쿼터초과로 보고 대기 모드 진입
+DAILY_CALL_SAFETY_LIMIT = 19800  # 하루 2만 건 중 안전마진 두고 선제적으로 대기
+
 OUT_DIR = r"C:\Users\user\Desktop\ocean_data"
 FINAL_CSV = os.path.join(OUT_DIR, "sea_obs_stn22441_full_hourly.csv")
 MAIN_CHECKPOINT = os.path.join(OUT_DIR, "sea_obs_stn22441_full_hourly.checkpoint")
@@ -72,6 +77,33 @@ def show_popup(message: str, title: str = "전체 결측 복구 알림"):
         except Exception:
             pass
     threading.Thread(target=_show, daemon=True).start()
+
+
+def seconds_until_next_reset():
+    """다음날 00:05 KST 기준까지 남은 초 (쿼터가 자정에 리셋된다고 가정, 여유 5분)"""
+    now = datetime.now()
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+    return max((tomorrow - now).total_seconds(), 60)
+
+
+def wait_for_quota_reset():
+    wait_sec = seconds_until_next_reset()
+    resume_time = datetime.now() + timedelta(seconds=wait_sec)
+    print(f"\n⏸ 오늘 API 쿼터를 다 쓴 것으로 보입니다.")
+    print(f"   {resume_time.strftime('%Y-%m-%d %H:%M')}쯤 자동으로 재개합니다. "
+          f"(컴퓨터만 계속 켜두시면 됩니다)")
+    show_popup(
+        f"오늘 API 쿼터 소진 추정.\n"
+        f"{resume_time.strftime('%Y-%m-%d %H:%M')}에 자동으로 재개됩니다.\n\n"
+        f"컴퓨터를 끄지 않고 두시면 알아서 이어서 진행됩니다.",
+        title="쿼터 대기 중 - 자동 재개 예정"
+    )
+    remaining = wait_sec
+    while remaining > 0:
+        chunk = min(remaining, 300)  # 5분 단위로 나눠서 대기 (반응성 위해)
+        time.sleep(chunk)
+        remaining -= chunk
+    print(f"[재개] 대기 끝 ({datetime.now().strftime('%Y-%m-%d %H:%M')}), 수집을 다시 시작합니다.\n")
 
 
 def call_api(tm: str):
@@ -223,12 +255,26 @@ def main():
         return
 
     recovered = 0
+    confirmed_missing = 0
     still_missing = []
+    consecutive_fail = 0
     start_time = time.time()
 
     try:
-        for i, tm_str in enumerate(todo, 1):
+        i = 0
+        while i < len(todo):
+            # 안전마진 넘으면 선제적으로 대기 (다른 스크립트 포함 공유 카운터 기준)
+            today_calls = api_quota.get_today_count()
+            if today_calls >= DAILY_CALL_SAFETY_LIMIT:
+                print(f"\n오늘 전체 호출 수({today_calls}, 다른 스크립트 포함)가 "
+                      f"안전선에 도달해 선제적으로 대기합니다.")
+                wait_for_quota_reset()
+                consecutive_fail = 0
+                continue  # 같은 i부터 다시
+
+            tm_str = todo[i]
             status, raw = call_api_with_retry(tm_str)
+            api_quota.increment_call_count(1)
 
             found = False
             if status == 200:
@@ -240,20 +286,36 @@ def main():
                         append_row(row)
                     recovered += 1
                     found = True
+                else:
+                    confirmed_missing += 1
+                consecutive_fail = 0
             else:
+                consecutive_fail += 1
+
+            if consecutive_fail >= CONSECUTIVE_FAIL_LIMIT:
+                print(f"\n⚠️ {consecutive_fail}번 연속 실패 감지 (status={status}). "
+                      f"일일 쿼터 초과로 추정됩니다.")
+                print(f"   현재 걸려있는 시각: {tm_str} (재개 시 이 시각부터 재시도)")
+                wait_for_quota_reset()
+                consecutive_fail = 0
+                continue  # mark_done 안 하고, i도 안 올리고 같은 항목 재시도
+
+            if status != 200:
                 still_missing.append((tm_str, status))
 
             mark_done(tm_str)
+            i += 1
 
             if i % 50 == 0 or i == len(todo):
                 elapsed = time.time() - start_time
                 rate = i / elapsed if elapsed > 0 else 0
                 eta_min = (len(todo) - i) / rate / 60 if rate > 0 else 0
                 print(f"[진행] {i}/{len(todo)} ({i/len(todo)*100:.1f}%) | "
-                      f"복구됨: {recovered}개 | 예상 남은시간: {eta_min:.1f}분")
+                      f"복구됨: {recovered}개 | 결측확정: {confirmed_missing}개 | "
+                      f"오류(재시도필요): {len(still_missing)}개 | 예상 남은시간: {eta_min:.1f}분")
 
             if i % 500 == 0:
-                show_popup(f"복구 진행 중...\n{i}/{len(todo)} 처리\n복구됨: {recovered}개")
+                show_popup(f"복구 진행 중...\n{i}/{len(todo)} 처리\n복구됨: {recovered}개\n결측확정: {confirmed_missing}개")
 
             time.sleep(REQUEST_DELAY_SEC)
 
@@ -270,17 +332,19 @@ def main():
         for tm, status in still_missing:
             f.write(f"{tm}\t{status}\n")
 
-    print(f"\n✅ 완료! 복구된 시각: {recovered}개 / 여전히 실패: {len(still_missing)}개")
+    print(f"\n✅ 완료! 복구된 시각: {recovered}개 / 결측확정: {confirmed_missing}개 / "
+          f"여전히 실패: {len(still_missing)}개")
     print(f"-> {STILL_MISSING_LOG} 확인")
 
     if len(still_missing) == 0:
         show_popup(
-            f"전체 결측 복구 완료!\n복구: {recovered}개\n\n"
+            f"전체 결측 복구 완료!\n복구: {recovered}개\n결측확정: {confirmed_missing}개\n\n"
             f"🎉 더 이상 오류로 남은 시각이 없습니다!\n(가져올 데이터가 더 없습니다)",
             title="가져올 데이터 없음 - 전부 처리 완료"
         )
     else:
-        show_popup(f"전체 결측 복구 완료!\n복구: {recovered}개\n여전히 실패: {len(still_missing)}개",
+        show_popup(f"전체 결측 복구 완료!\n복구: {recovered}개\n결측확정: {confirmed_missing}개\n"
+                   f"여전히 실패: {len(still_missing)}개",
                    title="전체 결측 복구 - 완료")
 
 
