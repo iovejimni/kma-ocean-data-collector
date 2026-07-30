@@ -212,6 +212,7 @@ def main():
     processed = 0
     saved_count = 0
     consecutive_fail = 0
+    caught_up_notified = False  # 실시간을 다 따라잡아서 대기 중이라는 알림을 이미 띄웠는지
     start_time = time.time()
 
     try:
@@ -228,9 +229,23 @@ def main():
 
             end_tm = datetime.now().replace(minute=0, second=0, microsecond=0)
             if current > end_tm:
+                # 실시간을 다 따라잡음 -> 지금 당장은 더 가져올 새 데이터가 없는 상태
+                if not caught_up_notified:
+                    print(f"\n✅ 실시간까지 다 따라잡았습니다. (현재 {current.strftime('%Y-%m-%d %H:%M')} 대기 중)")
+                    print("   더 가져올 새 데이터가 없어서, 다음 정시가 될 때까지 대기합니다.")
+                    show_popup(
+                        f"실시간까지 다 따라잡았습니다!\n\n"
+                        f"지금 당장은 더 가져올 새 데이터가 없습니다.\n"
+                        f"다음 정시({(current).strftime('%H:%M')})가 되면 자동으로 이어서 수집합니다.",
+                        title="가져올 데이터 없음 - 실시간 따라잡음"
+                    )
+                    caught_up_notified = True
                 # 아직 다음 정시가 안 됨 -> 잠깐 쉬었다가 재확인
                 time.sleep(60)
                 continue
+
+            # 다음 정시가 되어 새로 처리할 시각이 생겼으므로 알림 상태 초기화
+            caught_up_notified = False
 
             # 이번 배치에 포함할 시각들 (BATCH_SIZE개, end_tm과 일일한도를 넘지 않는 선에서)
             batch_times = []
