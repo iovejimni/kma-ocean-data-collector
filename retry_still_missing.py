@@ -142,6 +142,34 @@ def append_row(row):
         writer.writerow(row)
 
 
+def sort_and_dedupe_final_csv():
+    """복구 과정에서 파일 맨 끝에 순서 없이 쌓인 행들을,
+    TM(관측시각) 기준으로 다시 정렬하고 중복을 제거해서 깔끔하게 재작성한다."""
+    print("\n최종 정렬/중복제거 진행 중...")
+
+    with open(FINAL_CSV, encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        rows = [r for r in reader if r and len(r) >= 2]
+
+    before = len(rows)
+
+    seen = {}
+    for r in rows:
+        tm = r[1].strip()
+        seen[tm] = r
+
+    sorted_tms = sorted(seen.keys())
+
+    with open(FINAL_CSV, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(COLUMNS)
+        for tm in sorted_tms:
+            writer.writerow(seen[tm])
+
+    print(f"정렬/중복제거 완료: {before}행 -> {len(sorted_tms)}행 (시간순 정렬됨)")
+
+
 def main():
     targets = load_still_missing()
     done = load_done()
@@ -152,7 +180,12 @@ def main():
     print(f"이번에 재시도할 시각: {len(todo)}개\n")
 
     if not todo:
-        print("재시도할 게 없습니다.")
+        if len(targets) == 0:
+            msg = "still_missing 목록 자체가 비어있습니다.\n(현재 알려진 결측/오류가 없습니다)"
+        else:
+            msg = f"재시도할 시각이 없습니다.\n(총 {len(targets)}개 전부 이미 처리 완료)"
+        print(msg.replace("\n", " "))
+        show_popup(msg, title="가져올 데이터 없음")
         return
 
     recovered = 0
@@ -191,7 +224,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[중단됨] 지금까지 처리한 건 저장됐습니다. 다시 실행하면 이어서 진행됩니다.")
+        if recovered > 0:
+            sort_and_dedupe_final_csv()
         return
+
+    if recovered > 0:
+        sort_and_dedupe_final_csv()
 
     # still_missing 파일을 이번에도 실패한 것들로만 새로 씀
     with open(STILL_MISSING_LOG, "w", encoding="utf-8") as f:
@@ -202,8 +240,18 @@ def main():
     print(f"   복구됨(CSV에 추가): {recovered}개")
     print(f"   진짜 결측으로 확정(더 이상 재시도 대상 아님): {confirmed_missing}개")
     print(f"   여전히 오류로 확인 못함: {len(still_failed)}개 -> {STILL_MISSING_LOG}에 갱신됨")
-    show_popup(f"still_missing 재조회 완료!\n복구: {recovered}개\n결측확정: {confirmed_missing}개\n"
-               f"여전히 실패: {len(still_failed)}개")
+
+    if len(still_failed) == 0:
+        show_popup(
+            f"still_missing 재조회 완료!\n복구: {recovered}개\n결측확정: {confirmed_missing}개\n\n"
+            f"🎉 더 이상 오류로 남은 시각이 없습니다!\n(가져올 데이터가 더 없습니다)",
+            title="가져올 데이터 없음 - 전부 처리 완료"
+        )
+    else:
+        show_popup(
+            f"still_missing 재조회 완료!\n복구: {recovered}개\n결측확정: {confirmed_missing}개\n"
+            f"여전히 실패: {len(still_failed)}개"
+        )
 
 
 if __name__ == "__main__":

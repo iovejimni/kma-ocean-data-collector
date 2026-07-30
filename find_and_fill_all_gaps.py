@@ -161,6 +161,34 @@ def append_row(row):
         writer.writerow(row)
 
 
+def sort_and_dedupe_final_csv():
+    """복구 과정에서 파일 맨 끝에 순서 없이 쌓인 행들을,
+    TM(관측시각) 기준으로 다시 정렬하고 중복을 제거해서 깔끔하게 재작성한다."""
+    print("\n최종 정렬/중복제거 진행 중...")
+
+    with open(FINAL_CSV, encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        rows = [r for r in reader if r and len(r) >= 2]
+
+    before = len(rows)
+
+    seen = {}
+    for r in rows:
+        tm = r[1].strip()
+        seen[tm] = r  # 같은 TM이 여러 번 있으면 마지막 값으로 덮어씀
+
+    sorted_tms = sorted(seen.keys())
+
+    with open(FINAL_CSV, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(COLUMNS)
+        for tm in sorted_tms:
+            writer.writerow(seen[tm])
+
+    print(f"정렬/중복제거 완료: {before}행 -> {len(sorted_tms)}행 (시간순 정렬됨)")
+
+
 def main():
     gap_end = get_gap_end()
     print(f"검사 구간: {GAP_START} ~ {gap_end}  (전체 데이터 범위)")
@@ -186,7 +214,12 @@ def main():
     print(f"이번에 재조회할 시각: {len(todo)}개\n")
 
     if not todo:
-        print("재조회할 게 없습니다.")
+        if len(missing) == 0:
+            msg = "빈 시간대가 없습니다!\n전체 기간이 이미 다 채워져 있습니다."
+        else:
+            msg = f"재조회할 시각이 없습니다.\n(빈 시간대 {len(missing)}개 전부 이미 처리 완료)"
+        print(msg.replace("\n", " "))
+        show_popup(msg, title="가져올 데이터 없음")
         return
 
     recovered = 0
@@ -226,7 +259,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[중단됨] 지금까지 처리한 건 저장됐습니다. 다시 실행하면 이어서 진행됩니다.")
+        if recovered > 0:
+            sort_and_dedupe_final_csv()
         return
+
+    if recovered > 0:
+        sort_and_dedupe_final_csv()
 
     with open(STILL_MISSING_LOG, "w", encoding="utf-8") as f:
         for tm, status in still_missing:
@@ -234,8 +272,16 @@ def main():
 
     print(f"\n✅ 완료! 복구된 시각: {recovered}개 / 여전히 실패: {len(still_missing)}개")
     print(f"-> {STILL_MISSING_LOG} 확인")
-    show_popup(f"전체 결측 복구 완료!\n복구: {recovered}개\n여전히 실패: {len(still_missing)}개",
-               title="전체 결측 복구 - 완료")
+
+    if len(still_missing) == 0:
+        show_popup(
+            f"전체 결측 복구 완료!\n복구: {recovered}개\n\n"
+            f"🎉 더 이상 오류로 남은 시각이 없습니다!\n(가져올 데이터가 더 없습니다)",
+            title="가져올 데이터 없음 - 전부 처리 완료"
+        )
+    else:
+        show_popup(f"전체 결측 복구 완료!\n복구: {recovered}개\n여전히 실패: {len(still_missing)}개",
+                   title="전체 결측 복구 - 완료")
 
 
 if __name__ == "__main__":
