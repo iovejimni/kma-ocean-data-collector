@@ -72,7 +72,6 @@ START_TM = datetime(2011, 11, 15, 0, 0)
 
 OUT_CSV = f"sea_obs_stn{STN}_full_hourly.csv"
 CHECKPOINT_FILE = f"sea_obs_stn{STN}_full_hourly.checkpoint"
-FAILED_LOG = f"sea_obs_stn{STN}_failed_times.txt"
 
 COLUMNS = [
     "TP", "TM", "STN_ID", "STN_KO", "LON", "LAT",
@@ -167,11 +166,6 @@ def append_rows(rows):
         for r in rows:
             row = r[: len(COLUMNS)] + [""] * (len(COLUMNS) - len(r))
             writer.writerow(row)
-
-
-def log_failed(tm_str: str, reason: str):
-    with open(FAILED_LOG, "a", encoding="utf-8") as f:
-        f.write(f"{tm_str}\t{reason}\n")
 
 
 def seconds_until_next_reset():
@@ -270,7 +264,9 @@ def main():
                     saved_count += len(filtered)
                     consecutive_fail = 0
                 else:
-                    log_failed(tm_str, str(status))
+                    # 여기서 실패 시각을 따로 로그 남기지 않음.
+                    # -> find_and_fill_all_gaps.py가 전체 기간을 CSV와 대조해서
+                    #    빈 시간대를 찾아내므로, 이 실패도 결국 거기서 다시 잡힌다.
                     consecutive_fail += 1
 
                 if consecutive_fail >= CONSECUTIVE_FAIL_LIMIT:
